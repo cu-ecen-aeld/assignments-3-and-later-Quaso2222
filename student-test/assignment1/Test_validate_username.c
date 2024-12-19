@@ -21,7 +21,5 @@ void test_validate_my_username()
     char *user_name = malloc_username_from_conf_file();
     const char *my_user_name = my_username();
 
-    bool condition = (*user_name == *my_user_name);
-
-    TEST_ASSERT_TRUE_MESSAGE(condition, "AESD students, please fix me!");
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(my_user_name, user_name, "The strings are not equal!");
 }
