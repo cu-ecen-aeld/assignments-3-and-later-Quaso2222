@@ -85,5 +85,80 @@ int main(void)
         }
         else
             continue;
+
+        // Receives data over the connection and appends to file /var/tmp/aesdsocketdata, creating this file if it doesn’t exist.
+
+        FILE *file = fopen("/var/tmp/aesdsocketdata", "a+");
+        if (file == NULL)
+        {
+            syslog(LOG_ERR, "fail to open file : %s", strerror(errno));
+            close(client_socket_fd);
+            syslog(LOG_INFO, "close connection from : %s", client_ip_str);
+            continue;
+        }
+
+        char *buffer_pointer = NULL;
+        int packet_buffer_cap = 0;
+        int packet_buffer_len = 0;
+        char recv_temp_buf[BUFFER_SIZE];
+        int bytes_received;
+
+        int connection_active = 1;
+        while (connection_active && !signal_recv)
+        {
+            bytes_received = recv(client_socket_fd, recv_temp_buf, sizeof(recv_temp_buf), 0);
+            if (bytes_received < 0)
+            {
+                if (errno == EINTR && signal_recv)
+                    break;
+                if (errno == EINTR)
+                    continue;
+                syslog(LOG_ERR, "error recving from %s : %s", client_ip_str, strerror(errno));
+                connection_active = 0;
+                break;
+            }
+            if (bytes_received == 0)
+            {
+                // 客户端关闭连接
+                connection_active = 0;
+                break;
+            }
+
+            // allocate buffer capacity
+            if (packet_buffer_len + bytes_received + 1 > packet_buffer_cap + 1 > packet_buffer_cap)
+            {
+                int new_cap = (packet_buffer_cap == 0) ? (packet_buffer_cap = 1) : (2 * packet_buffer_cap);
+                if (new_cap < packet_buffer_len + bytes_received + 1)
+                {
+                    new_cap = packet_buffer_len + bytes_received + 1;
+                }
+                char *new_buf = realloc(buffer_pointer, new_cap);
+                if (new_buf = NULL)
+                {
+                    syslog(LOG_ERR, "fail to allocate buffer for %s packet", client_ip_str);
+                    buffer_pointer = NULL;
+                    packet_buffer_cap = 0;
+                    packet_buffer_len = 0;
+                    connection_active = 0;
+                    break;
+                }
+                buffer_pointer = new_buf;
+                packet_buffer_cap = new_cap;
+
+                memcpy(buffer_pointer + packet_buffer_len, recv_temp_buf, bytes_received);
+                packet_buffer_len += bytes_received;
+                buffer_pointer[packet_buffer_len] = '\0';
+
+                if (fwrite(buffer_pointer, 1, packet_buffer_len, file) != packet_buffer_len)
+                {
+                    syslog(LOG_ERR, "Error writing  %s", strerror(errno));
+                    connection_active = 0;
+                    break;
+                }
+
+                fflush(file);
+                rewind(file);
+                        }
+        }
     }
 }

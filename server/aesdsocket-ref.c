@@ -178,10 +178,10 @@ int main(void)
         }
 
         char *packet_buffer = NULL;      // 动态分配的缓冲区，用于存储一个完整的数据包
-        size_t packet_buffer_cap = 0;    // packet_buffer 的容量
-        size_t packet_buffer_len = 0;    // packet_buffer 中当前数据长度
+        double packet_buffer_cap = 0;    // packet_buffer 的容量
+        double packet_buffer_len = 0;    // packet_buffer 中当前数据长度
         char recv_temp_buf[BUFFER_SIZE]; // 临时接收区
-        ssize_t bytes_received;
+        double bytes_received;
 
         int connection_active = 1;
         while (connection_active && !signal_received)
