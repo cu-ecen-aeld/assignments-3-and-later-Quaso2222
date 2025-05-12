@@ -30,6 +30,36 @@ void signal_handler(int sig)
     }
 }
 
+void send_file_to_client(int client_fd, const char *file_path)
+{
+    FILE *file = fopen(file_path, "r");
+    if (file = NULL)
+    {
+        syslog(LOG_ERR, "can not open file %s : %s", file_path, strerror(errno));
+        return;
+    }
+    char buffer[BUFFER_SIZE];
+    size_t bytes_read;
+    while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0)
+    {
+        ssize_t bytes_sent_total = 0;
+        while (bytes_sent_total < bytes_read)
+        {
+            ssize_t bytes_sent = send(client_fd, buffer + bytes_sent_total, bytes_read - bytes_sent_total, 0);
+            if (bytes_sent == -1)
+            {
+                if (errno == EINTR)
+                    continue;
+                syslog(LOG_ERR, "Error sending data to client: %s", strerror(errno));
+                fclose(file);
+                return;
+            }
+            bytes_sent_total += bytes_sent;
+        }
+    }
+    fclose(file);
+}
+
 int main(void)
 {
     struct sockaddr_in server_addr, client_addr;
@@ -149,16 +179,67 @@ int main(void)
                 packet_buffer_len += bytes_received;
                 buffer_pointer[packet_buffer_len] = '\0';
 
-                if (fwrite(buffer_pointer, 1, packet_buffer_len, file) != packet_buffer_len)
+                char *newline_char;
+                char *current_search_start = buffer_pointer;
+                while ((newline_char = strchr(current_search_start, '\n')) != NULL)
                 {
-                    syslog(LOG_ERR, "Error writing  %s", strerror(errno));
-                    connection_active = 0;
+                    size_t packet_len_inc_newline = (newline_char - current_search_start) + 1;
+                    if (fwrite(current_search_start, 1, packet_len_inc_newline, file) != packet_len_inc_newline)
+                    {
+                        syslog(LOG_ERR, "Error writing to %s: %s", DATA_FILE, strerror(errno));
+                        connection_active = 0;
+                        break;
+                    }
+                    fflush(file);
+                    rewind(file);
+                    send_file_to_client(client_socket_fd, DATA_FILE);
+                    fseek(file, 0, SEEK_END);
+
+                    current_search_start = newline_char + 1;
+                }
+                if (!connection_active)
                     break;
+
+                if (current_search_start > buffer_pointer && current_search_start <= buffer_pointer + packet_buffer_len)
+                {
+                    size_t remaining_len = packet_buffer_len - (current_search_start - buffer_pointer);
+                    memmove(buffer_pointer, current_search_start, remaining_len);
+                    packet_buffer_len = remaining_len;
+                    buffer_pointer[packet_buffer_len] = '\0';
+                }
+                else if (current_search_start >= buffer_pointer + packet_buffer_len)
+                {
+
+                    packet_buffer_len = 0;
+                    if (buffer_pointer)
+                        buffer_pointer[0] = '\0';
                 }
 
-                fflush(file);
-                rewind(file);
-                        }
+                free(buffer_pointer);
+                buffer_pointer = NULL;
+                fclose(file);
+
+                syslog(LOG_INFO, "Closed connection from %s", client_ip_str);
+                close(client_socket_fd);
+                client_socket_fd = -1;
+
+                if (signal_recv)
+                    break;
+            }
+            syslog(LOG_INFO, "Server shutting down.");
+
+            if (client_socket_fd != -1)
+            {
+                close(client_socket_fd);
+            }
+
+            if (remove(DATA_FILE) != 0 && errno != ENOENT)
+            {
+                syslog(LOG_WARNING, "Could not remove %s on final shutdown: %s", DATA_FILE, strerror(errno));
+            }
+
+            closelog();
+            return 0;
         }
     }
 }
