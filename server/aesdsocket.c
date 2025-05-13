@@ -1,4 +1,4 @@
-#define _POSIX_C_SOURCE 200809L // 为了 sigaction
+#define _POSIX_C_SOURCE 200809L
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,23 +23,32 @@ bool signal_recv = 0;
 
 void signal_handler(int sig)
 {
+    // syslog(LOG_INFO, "enter signal_handler");
     if ((sig == SIGINT) || (sig == SIGTERM))
     {
         syslog(LOG_INFO, "Caught signal, exiting");
         signal_recv = 1;
+        if (server_socket_fd != -1)
+        {
+            shutdown(server_socket_fd, SHUT_RDWR); // 尝试优雅关闭
+            close(server_socket_fd);
+            server_socket_fd = -1;
+        }
+        // 删除数据文件
+        remove(DATA_FILE);
     }
 }
 
 void send_file_to_client(int client_fd, const char *file_path)
 {
     FILE *file = fopen(file_path, "r");
-    if (file = NULL)
+    if (file == NULL)
     {
         syslog(LOG_ERR, "can not open file %s : %s", file_path, strerror(errno));
         return;
     }
     char buffer[BUFFER_SIZE];
-    size_t bytes_read;
+    ssize_t bytes_read;
     while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0)
     {
         ssize_t bytes_sent_total = 0;
@@ -54,6 +63,8 @@ void send_file_to_client(int client_fd, const char *file_path)
                 fclose(file);
                 return;
             }
+            syslog(LOG_INFO, "sent %zu bytes to client", bytes_sent);
+            syslog(LOG_INFO, "buffer content %s", buffer);
             bytes_sent_total += bytes_sent;
         }
     }
@@ -71,6 +82,14 @@ int main(void)
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = signal_handler;
+    sigemptyset(&sa.sa_mask); // 在处理器执行期间不阻塞其他信号
+    sa.sa_flags = 0;          // 不要设置 SA_RESTART，以便 accept 等系统调用被中断
+    if (sigaction(SIGINT, &sa, NULL) == -1 || sigaction(SIGTERM, &sa, NULL) == -1)
+    {
+        syslog(LOG_ERR, "Error setting up signal handlers: %s", strerror(errno));
+        closelog();
+        return -1; // b. 如果套接字连接步骤失败，则失败并返回 -1
+    }
 
     server_socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_socket_fd == -1)
@@ -85,7 +104,7 @@ int main(void)
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(PORT);
     // Opens a stream socket bound to port 9000, failing and returning -1 if any of the socket connection steps fail.
-    if (bind(server_socket_fd, &server_addr, sizeof(server_addr)) == -1)
+    if (bind(server_socket_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1)
     {
         syslog(LOG_ERR, "socket bind faild: %s", strerror(errno));
         close(server_socket_fd);
@@ -94,7 +113,7 @@ int main(void)
         return -1;
     }
     //  Listens for and accepts a connection
-
+    syslog(LOG_INFO, "bind secccessfully : %d", PORT);
     if (listen(server_socket_fd, 10) == -1)
     {
         syslog(LOG_ERR, "socket listen failed : %s", strerror(errno));
@@ -107,7 +126,8 @@ int main(void)
     // Listens for and accepts a connection
     while (!signal_recv)
     {
-        client_socket_fd = accept(client_socket_fd, &client_addr, sizeof(client_addr));
+        syslog(LOG_INFO, "begin listen : %d", PORT);
+        client_socket_fd = accept(server_socket_fd, (struct sockaddr *)&client_addr, &client_addr_len);
         if (client_socket_fd != -1)
         {
             inet_ntop(AF_INET, &(client_addr.sin_addr), client_ip_str, INET_ADDRSTRLEN);
@@ -126,6 +146,10 @@ int main(void)
             syslog(LOG_INFO, "close connection from : %s", client_ip_str);
             continue;
         }
+        else
+        {
+            syslog(LOG_INFO, "open file : %s", DATA_FILE);
+        }
 
         char *buffer_pointer = NULL;
         int packet_buffer_cap = 0;
@@ -136,6 +160,7 @@ int main(void)
         int connection_active = 1;
         while (connection_active && !signal_recv)
         {
+            syslog(LOG_INFO, "Begin receive from : %s", DATA_FILE);
             bytes_received = recv(client_socket_fd, recv_temp_buf, sizeof(recv_temp_buf), 0);
             if (bytes_received < 0)
             {
@@ -147,6 +172,10 @@ int main(void)
                 connection_active = 0;
                 break;
             }
+            else
+            {
+                syslog(LOG_INFO, "Received %d bytes from %s", bytes_received, client_ip_str);
+            }
             if (bytes_received == 0)
             {
                 // 客户端关闭连接
@@ -155,7 +184,7 @@ int main(void)
             }
 
             // allocate buffer capacity
-            if (packet_buffer_len + bytes_received + 1 > packet_buffer_cap + 1 > packet_buffer_cap)
+            if (packet_buffer_len + bytes_received + 1 > packet_buffer_cap)
             {
                 int new_cap = (packet_buffer_cap == 0) ? (packet_buffer_cap = 1) : (2 * packet_buffer_cap);
                 if (new_cap < packet_buffer_len + bytes_received + 1)
@@ -163,7 +192,7 @@ int main(void)
                     new_cap = packet_buffer_len + bytes_received + 1;
                 }
                 char *new_buf = realloc(buffer_pointer, new_cap);
-                if (new_buf = NULL)
+                if (new_buf == NULL)
                 {
                     syslog(LOG_ERR, "fail to allocate buffer for %s packet", client_ip_str);
                     buffer_pointer = NULL;
@@ -174,72 +203,79 @@ int main(void)
                 }
                 buffer_pointer = new_buf;
                 packet_buffer_cap = new_cap;
+                syslog(LOG_INFO, "Buffer allocation complete : %d bytes", packet_buffer_cap);
+            }
 
-                memcpy(buffer_pointer + packet_buffer_len, recv_temp_buf, bytes_received);
-                packet_buffer_len += bytes_received;
+            memcpy(buffer_pointer + packet_buffer_len, recv_temp_buf, bytes_received);
+            packet_buffer_len += bytes_received;
+            buffer_pointer[packet_buffer_len] = '\0';
+
+            char *newline_char;
+            char *current_search_start = buffer_pointer;
+            while ((newline_char = strchr(current_search_start, '\n')) != NULL)
+            {
+                size_t packet_len_inc_newline = (newline_char - current_search_start) + 1;
+                if (fwrite(current_search_start, 1, packet_len_inc_newline, file) != packet_len_inc_newline)
+                {
+                    syslog(LOG_ERR, "Error writing to %s: %s", DATA_FILE, strerror(errno));
+                    connection_active = 0;
+                    break;
+                }
+                else
+                {
+                    syslog(LOG_INFO, "write %zu bytes to %s", packet_len_inc_newline, DATA_FILE);
+                }
+                fflush(file);
+                rewind(file);
+                //
+                send_file_to_client(client_socket_fd, DATA_FILE);
+                // send_file_to_client(client_socket_fd, "/home/linux/embeded/assignments-3-and-later-Quaso2222/server/testcontent");
+                syslog(LOG_INFO, "after send function");
+                fseek(file, 0, SEEK_END);
+
+                current_search_start = newline_char + 1;
+            }
+            if (!connection_active)
+                break;
+            syslog(LOG_INFO, "buffer pointer reset");
+            if (current_search_start > buffer_pointer && current_search_start <= buffer_pointer + packet_buffer_len)
+            {
+                size_t remaining_len = packet_buffer_len - (current_search_start - buffer_pointer);
+                memmove(buffer_pointer, current_search_start, remaining_len);
+                packet_buffer_len = remaining_len;
                 buffer_pointer[packet_buffer_len] = '\0';
-
-                char *newline_char;
-                char *current_search_start = buffer_pointer;
-                while ((newline_char = strchr(current_search_start, '\n')) != NULL)
-                {
-                    size_t packet_len_inc_newline = (newline_char - current_search_start) + 1;
-                    if (fwrite(current_search_start, 1, packet_len_inc_newline, file) != packet_len_inc_newline)
-                    {
-                        syslog(LOG_ERR, "Error writing to %s: %s", DATA_FILE, strerror(errno));
-                        connection_active = 0;
-                        break;
-                    }
-                    fflush(file);
-                    rewind(file);
-                    send_file_to_client(client_socket_fd, DATA_FILE);
-                    fseek(file, 0, SEEK_END);
-
-                    current_search_start = newline_char + 1;
-                }
-                if (!connection_active)
-                    break;
-
-                if (current_search_start > buffer_pointer && current_search_start <= buffer_pointer + packet_buffer_len)
-                {
-                    size_t remaining_len = packet_buffer_len - (current_search_start - buffer_pointer);
-                    memmove(buffer_pointer, current_search_start, remaining_len);
-                    packet_buffer_len = remaining_len;
-                    buffer_pointer[packet_buffer_len] = '\0';
-                }
-                else if (current_search_start >= buffer_pointer + packet_buffer_len)
-                {
-
-                    packet_buffer_len = 0;
-                    if (buffer_pointer)
-                        buffer_pointer[0] = '\0';
-                }
-
-                free(buffer_pointer);
-                buffer_pointer = NULL;
-                fclose(file);
-
-                syslog(LOG_INFO, "Closed connection from %s", client_ip_str);
-                close(client_socket_fd);
-                client_socket_fd = -1;
-
-                if (signal_recv)
-                    break;
             }
-            syslog(LOG_INFO, "Server shutting down.");
-
-            if (client_socket_fd != -1)
+            else if (current_search_start >= buffer_pointer + packet_buffer_len)
             {
-                close(client_socket_fd);
-            }
 
-            if (remove(DATA_FILE) != 0 && errno != ENOENT)
-            {
-                syslog(LOG_WARNING, "Could not remove %s on final shutdown: %s", DATA_FILE, strerror(errno));
+                packet_buffer_len = 0;
+                if (buffer_pointer)
+                    buffer_pointer[0] = '\0';
             }
-
-            closelog();
-            return 0;
         }
+        free(buffer_pointer);
+        buffer_pointer = NULL;
+        fclose(file);
+
+        syslog(LOG_INFO, "Closed connection from %s", client_ip_str);
+        close(client_socket_fd);
+        client_socket_fd = -1;
+
+        if (signal_recv)
+            break;
     }
+    syslog(LOG_INFO, "Server shutting down.");
+
+    if (client_socket_fd != -1)
+    {
+        close(client_socket_fd);
+    }
+
+    if (remove(DATA_FILE) != 0 && errno != ENOENT)
+    {
+        syslog(LOG_WARNING, "Could not remove %s on final shutdown: %s", DATA_FILE, strerror(errno));
+    }
+
+    closelog();
+    return 0;
 }
