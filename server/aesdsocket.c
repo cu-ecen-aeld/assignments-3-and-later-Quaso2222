@@ -71,8 +71,24 @@ void send_file_to_client(int client_fd, const char *file_path)
     fclose(file);
 }
 
-int main(void)
+void daemonize()
 {
+    pid_t pid;
+    pid = fork();
+    if (pid < 0)
+    {
+        syslog(LOG_ERR, "Fork failed: %s", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    if (pid > 0)
+    {
+        // Parent process
+        exit(EXIT_SUCCESS);
+    }
+}
+int main(int argc, char *argv[])
+{
+
     struct sockaddr_in server_addr, client_addr;
     socklen_t client_addr_len = sizeof(client_addr);
     int client_socket_fd = -1;
@@ -89,6 +105,16 @@ int main(void)
         syslog(LOG_ERR, "Error setting up signal handlers: %s", strerror(errno));
         closelog();
         return -1; // b. 如果套接字连接步骤失败，则失败并返回 -1
+    }
+
+    int daemonize_mode = 0;
+    if (argc > 1)
+    {
+        if (strcmp(argv[1], "-d") == 0)
+        {
+            daemonize_mode = 1;
+            syslog(LOG_INFO, "Daemon mode requested.");
+        }
     }
 
     server_socket_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -123,6 +149,11 @@ int main(void)
         return -1;
     }
     syslog(LOG_INFO, "socket listen on port : %d", PORT);
+
+    if (daemonize_mode)
+    {
+        daemonize();
+    }
     // Listens for and accepts a connection
     while (!signal_recv)
     {
