@@ -180,8 +180,8 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         }
         memcpy((void *)entry->buffptr, temp_buffer.buffer, newline_length);
         entry->size = newline_length;
-        entry->buffptr[newline_length] = '\0';     // Null-terminate the string
-        temp_buffer.data_length -= newline_length; // Update the data length
+        (char *)entry->buffptr[newline_length] = '\0'; // Null-terminate the string
+        temp_buffer.data_length -= newline_length;     // Update the data length
         // Shift remaining data to the beginning of the buffer
         memmove(temp_buffer.buffer, temp_buffer.buffer + newline_length, temp_buffer.data_length);
         PDEBUG("write: entry size %zu", entry->size);
