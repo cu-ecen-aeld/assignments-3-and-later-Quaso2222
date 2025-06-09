@@ -171,17 +171,18 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
             retval = -ENOMEM; // 内存分配失败
             goto out;         // 跳转到 out 标签确保锁被释放
         }
-        entry->buffptr = kmalloc(newline_length + 1, GFP_KERNEL);
-        if (!entry->buffptr)
+        char *temp = kmalloc(newline_length + 1, GFP_KERNEL);
+        if (!temp)
         {
             kfree(entry);
             retval = -ENOMEM; // 内存分配失败
             goto out;         // 跳转到 out 标签确保锁被释放
         }
-        memcpy((void *)entry->buffptr, temp_buffer.buffer, newline_length);
+        memcpy((void *)temp, temp_buffer.buffer, newline_length);
         entry->size = newline_length;
-        (char *)entry->buffptr[newline_length] = '\0'; // Null-terminate the string
-        temp_buffer.data_length -= newline_length;     // Update the data length
+        temp[newline_length] = '\0';               // Null-terminate the string
+        entry->buffptr = temp;                     // Set the buffer pointer to the allocated memory
+        temp_buffer.data_length -= newline_length; // Update the data length
         // Shift remaining data to the beginning of the buffer
         memmove(temp_buffer.buffer, temp_buffer.buffer + newline_length, temp_buffer.data_length);
         PDEBUG("write: entry size %zu", entry->size);
