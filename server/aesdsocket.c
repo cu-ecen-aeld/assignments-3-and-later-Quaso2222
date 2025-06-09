@@ -17,8 +17,14 @@
 #include <time.h>
 
 #define PORT 9000
-#define DATA_FILE "/var/tmp/aesdsocketdata"
 #define BUFFER_SIZE 1024 // 用于读取文件和接收数据的初始/临时缓冲区大小
+#define USE_AESD_CHAR_DEVICE 1
+
+#if USE_AESD_CHAR_DEVICE
+#define DATA_FILE "/dev/aesdchar"
+#else
+#define DATA_FILE "/var/tmp/aesdsocketdata"
+#endif
 
 int server_socket_fd = -1;
 bool signal_recv = 0;
@@ -37,7 +43,10 @@ void signal_handler(int sig)
             server_socket_fd = -1;
         }
         // 删除数据文件
-        remove(DATA_FILE);
+        if (!USE_AESD_CHAR_DEVICE)
+        {
+            remove(DATA_FILE);
+        }
     }
 }
 
@@ -414,8 +423,11 @@ int main(int argc, char *argv[])
     {
         syslog(LOG_INFO, "open file : %s", DATA_FILE);
     }
-    pthread_t timer_thread_id;
-    pthread_create(&timer_thread_id, NULL, timer_thread, (void *)msg_file);
+    if (!USE_AESD_CHAR_DEVICE)
+    {
+        pthread_t timer_thread_id;
+        pthread_create(&timer_thread_id, NULL, timer_thread, (void *)msg_file);
+    }
     while (!signal_recv)
     {
         int client_socket_fd = -1;
@@ -460,12 +472,13 @@ int main(int argc, char *argv[])
     // {
     //     close(client_socket_fd);
     // }
-
-    if (remove(DATA_FILE) != 0 && errno != ENOENT)
+    if (!USE_AESD_CHAR_DEVICE)
     {
-        syslog(LOG_WARNING, "Could not remove %s on final shutdown: %s", DATA_FILE, strerror(errno));
+        if (remove(DATA_FILE) != 0 && errno != ENOENT)
+        {
+            syslog(LOG_WARNING, "Could not remove %s on final shutdown: %s", DATA_FILE, strerror(errno));
+        }
     }
-
     closelog();
     return 0;
 }
